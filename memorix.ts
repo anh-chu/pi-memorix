@@ -22,7 +22,23 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+
+/** Load ~/.memorix/.env so the hook subprocess has embedding keys available. */
+function loadMemorixDotEnv(): Record<string, string> {
+	try {
+		const content = readFileSync(join(homedir(), ".memorix", ".env"), "utf8");
+		const vars: Record<string, string> = {};
+		for (const line of content.split("\n")) {
+			const m = line.match(/^([A-Z][A-Z0-9_]*)=(.*)/);
+			if (m && m[2]) vars[m[1]] = m[2];
+		}
+		return vars;
+	} catch {
+		return {};
+	}
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -129,7 +145,7 @@ function makeSubprocessHookRunner(): HookRunner {
 			try {
 				child = spawn("memorix", ["hook"], {
 					stdio: ["pipe", "pipe", "pipe"],
-					env: process.env,
+					env: { ...loadMemorixDotEnv(), ...process.env },
 				});
 			} catch {
 				memorixUnavailable = true;
