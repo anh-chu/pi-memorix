@@ -58,6 +58,17 @@ With this enabled, the extension installs the hook the first time you open a rep
 memorix git-hook   # run once per repo
 ```
 
+## Bootstrapping an existing repo
+
+For repos with existing history, seed Memorix from past commits before the git hook takes over:
+
+```bash
+memorix ingest log             # last 10 commits
+memorix ingest log --count 50  # go further back
+```
+
+Run once per repo. The git hook handles new commits from that point on.
+
 ## Usage
 
 Once installed, the extension runs automatically with every Pi session. Steps 3 and 4 are optional — the extension's lifecycle hooks work without them. The MCP server (step 3) adds the ability for the LLM to call `memorix_search` and `memorix_store` directly on top of the automatic capture.
