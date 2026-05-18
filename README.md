@@ -89,6 +89,23 @@ MEMORIX_PI_DEBUG=1 pi
 
 Logs all hook calls, payloads, and failures to stderr.
 
+## Maintenance
+
+```bash
+# Health check — project identity, data, conflicts
+memorix doctor
+
+# Preview and remove low-quality auto-captured noise
+memorix cleanup --dry
+memorix cleanup --force
+
+# Inspect what's expiring; archive old memories
+memorix retention
+
+# Project info and rules sync status
+memorix status
+```
+
 ## Notes
 
 - Memorix requires a `.git` directory in the project root to identify the project. Outside git repos, hooks are silently skipped.
