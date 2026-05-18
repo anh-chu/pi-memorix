@@ -15,14 +15,17 @@ Without this extension, Memorix memory tools are only available when the LLM exp
 
 Also adds a `/mem <query>` command for quick memory search from within Pi.
 
-`PostToolUse` is intentionally skipped — Memorix's git hooks and the LLM's own MCP tool calls (via Memorix's CLAUDE.md rules) already cover auto-capture.
-
-## Requirements
-
-- [Pi](https://pi.dev) coding agent
-- [Memorix](https://github.com/AVIDS2/memorix) installed and on PATH: `npm install -g memorix`
+`PostToolUse` is intentionally skipped — Memorix's git hooks and the LLM's own MCP tool calls already cover auto-capture.
 
 ## Installation
+
+Install [Memorix](https://github.com/AVIDS2/memorix) first:
+
+```bash
+npm install -g memorix
+```
+
+Then install this extension:
 
 ```bash
 pi install npm:pi-memorix
@@ -32,12 +35,6 @@ To try it without making it permanent:
 
 ```bash
 pi -e npm:pi-memorix
-```
-
-Or copy the extension file directly if you prefer:
-
-```bash
-cp memorix.ts ~/.pi/agent/extensions/memorix.ts
 ```
 
 ## Usage
