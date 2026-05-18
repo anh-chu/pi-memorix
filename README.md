@@ -18,22 +18,36 @@ Also adds a `/mem <query>` command for quick memory search from within Pi.
 
 ## Installation
 
-Install [Memorix](https://github.com/AVIDS2/memorix) first:
+**1. Install Memorix:**
 
 ```bash
 npm install -g memorix
 ```
 
-Then install this extension:
+**2. Install this extension:**
 
 ```bash
 pi install npm:pi-memorix
 ```
 
-To try it without making it permanent:
+To try it without making it permanent: `pi -e npm:pi-memorix`
+
+**3. Wire the MCP server** so the LLM can call `memorix_search`, `memorix_store`, etc. directly:
+
+Add this entry to `~/.pi/agent/mcp.json` under `mcpServers`:
+
+```json
+"memorix": {
+  "command": "memorix",
+  "args": ["serve"],
+  "directTools": true
+}
+```
+
+**4. (Optional) Install the git hook** for commit-time memory capture:
 
 ```bash
-pi -e npm:pi-memorix
+memorix git-hook   # run once per repo
 ```
 
 ## Usage
