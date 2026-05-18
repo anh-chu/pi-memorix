@@ -2,7 +2,7 @@
 
 Pi extension that bridges [Memorix](https://github.com/AVIDS2/memorix) memory hooks into Pi's session lifecycle.
 
-Without this extension, Memorix memory tools are only available when the LLM explicitly calls them. This extension wires Memorix into Pi's event lifecycle so memory management is automatic: previous context loads at session start, relevant memories are injected per prompt, and a session summary is saved on exit.
+Without this extension, Memorix memory tools are only available when the LLM explicitly calls them. This extension wires Memorix into Pi's event lifecycle so memory management is automatic: previous context loads at session start, relevant memories are injected per prompt, file writes and commands are captured as observations in real time, and a session summary is saved on exit.
 
 ## What it does
 
