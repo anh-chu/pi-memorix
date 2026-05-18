@@ -18,8 +18,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +52,53 @@ type SessionEntry = {
 		content?: unknown;
 	};
 };
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+/**
+ * Optional config file at ~/.pi/agent/memorix.json
+ *
+ * Example:
+ *   { "autoGitHook": true }
+ */
+interface MemorixConfig {
+	/** Auto-install memorix git-hook in new repos on session start. Default: false. */
+	autoGitHook?: boolean;
+}
+
+function loadConfig(): MemorixConfig {
+	try {
+		const configPath = join(getAgentDir(), "memorix.json");
+		if (existsSync(configPath)) {
+			return JSON.parse(readFileSync(configPath, "utf-8")) as MemorixConfig;
+		}
+	} catch { /* ignore */ }
+	return {};
+}
+
+/** Returns true if a memorix post-commit hook is already installed in this repo. */
+function isGitHookInstalled(repoRoot: string): boolean {
+	try {
+		const hookPath = join(repoRoot, ".git", "hooks", "post-commit");
+		if (!existsSync(hookPath)) return false;
+		return readFileSync(hookPath, "utf-8").includes("memorix");
+	} catch { return false; }
+}
+
+/** Run `memorix git-hook` once in cwd. Returns true on success. */
+function installGitHook(cwd: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		try {
+			const child = spawn("memorix", ["git-hook"], {
+				cwd,
+				stdio: ["ignore", "ignore", "ignore"],
+				env: process.env,
+			});
+			child.on("close", (code) => resolve(code === 0));
+			child.on("error", () => resolve(false));
+		} catch { resolve(false); }
+	});
+}
 
 /**
  * Tools Memorix never stores (file_read → "never", memorix internals → "never").
@@ -189,8 +239,16 @@ export function buildTranscript(entries: SessionEntry[]): string {
  *   import { createMemorixExtension } from "./memorix.ts";
  *   createTestSession({ extensionFactories: [createMemorixExtension(mockHook)] })
  */
-export function createMemorixExtension(hookRunner?: HookRunner): (pi: ExtensionAPI) => void {
+/** Test-only overrides — not part of the public API. */
+export interface _TestOverrides {
+	config?: MemorixConfig;
+	installGitHook?: (cwd: string) => Promise<boolean>;
+}
+
+export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _TestOverrides): (pi: ExtensionAPI) => void {
 	const runHook: HookRunner = hookRunner ?? makeSubprocessHookRunner();
+	const _config = () => _overrides?.config ?? loadConfig();
+	const _installGitHook = _overrides?.installGitHook ?? installGitHook;
 
 	return function (pi: ExtensionAPI) {
 		let sessionId = "";
@@ -201,12 +259,27 @@ export function createMemorixExtension(hookRunner?: HookRunner): (pi: ExtensionA
 		/**
 		 * session_start → SessionStart
 		 * Loads previous session context, stashes it for the first turn.
+		 * If autoGitHook is enabled in memorix.json, installs the git hook if missing.
 		 */
 		pi.on("session_start", async (_event, ctx) => {
 			sessionCwd = ctx.cwd ?? process.cwd();
 			sessionId = ctx.sessionManager.getSessionName() ?? randomUUID();
 			pendingStartContext = "";
 			firstTurnDone = false;
+
+			// Auto-install git hook if opted in and not already present
+			const config = _config();
+			if (config.autoGitHook && existsSync(join(sessionCwd, ".git"))) {
+				if (!isGitHookInstalled(sessionCwd)) {
+					const ok = await _installGitHook(sessionCwd);
+					if (ok) {
+						debug(`Auto-installed git hook in ${sessionCwd}`);
+						if (ctx.hasUI) ctx.ui.notify("Memorix: git hook installed for this repo", "info");
+					} else {
+						debug(`Auto-install git hook failed in ${sessionCwd}`);
+					}
+				}
+			}
 
 			try {
 				const result = await runHook("SessionStart", { sessionId, cwd: sessionCwd });

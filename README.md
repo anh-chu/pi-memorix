@@ -44,7 +44,15 @@ Add this entry to `~/.pi/agent/mcp.json` under `mcpServers`:
 }
 ```
 
-**4. (Optional) Install the git hook** for commit-time memory capture:
+**4. (Optional) Enable auto-install of the git hook** so commit-time capture is set up automatically for every repo you open:
+
+Create `~/.pi/agent/memorix.json`:
+
+```json
+{ "autoGitHook": true }
+```
+
+With this enabled, the extension installs the hook the first time you open a repo that doesn't have it yet. To install manually instead:
 
 ```bash
 memorix git-hook   # run once per repo

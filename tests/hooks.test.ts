@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestSession, when, calls, says, type TestSession } from "@marcfargas/pi-test-harness";
 import { createMemorixExtension, buildTranscript, type HookResult, type HookRunner } from "../memorix.ts";
 
@@ -467,6 +470,124 @@ describe("resilience — memorix failures never crash Pi", () => {
 
 		expect(injectedSystemPrompts[0]).not.toContain("memorix-context");
 		expect(injectedSystemPrompts[0]).not.toContain("memorix-session-context");
+	});
+});
+
+// ─── auto-git-hook ───────────────────────────────────────────────────────────
+
+describe("auto-git-hook", () => {
+	let t: TestSession;
+	let tempDirs: string[] = [];
+
+	afterEach(() => {
+		t?.dispose();
+		for (const d of tempDirs) {
+			try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
+		}
+		tempDirs = [];
+	});
+
+	function makeRepo(): string {
+		const dir = mkdtempSync(join(tmpdir(), "pi-memorix-test-"));
+		mkdirSync(join(dir, ".git"));
+		tempDirs.push(dir);
+		return dir;
+	}
+
+	function makeNonRepo(): string {
+		const dir = mkdtempSync(join(tmpdir(), "pi-memorix-test-"));
+		tempDirs.push(dir);
+		return dir;
+	}
+
+	it("installs git hook when autoGitHook is true and .git exists", async () => {
+		const repoDir = makeRepo();
+		const installed: string[] = [];
+		const { hook } = makeMockHook();
+
+		t = await createTestSession({
+			cwd: repoDir,
+			extensionFactories: [createMemorixExtension(hook, {
+				config: { autoGitHook: true },
+				installGitHook: async (cwd) => { installed.push(cwd); return true; },
+			})],
+			mockTools: MOCK_TOOLS,
+		});
+
+		expect(installed).toHaveLength(1);
+		expect(installed[0]).toBe(repoDir);
+	});
+
+	it("skips install when .git does not exist", async () => {
+		const dir = makeNonRepo();
+		const installed: string[] = [];
+		const { hook } = makeMockHook();
+
+		t = await createTestSession({
+			cwd: dir,
+			extensionFactories: [createMemorixExtension(hook, {
+				config: { autoGitHook: true },
+				installGitHook: async (cwd) => { installed.push(cwd); return true; },
+			})],
+			mockTools: MOCK_TOOLS,
+		});
+
+		expect(installed).toHaveLength(0);
+	});
+
+	it("skips install when hook is already present", async () => {
+		const repoDir = makeRepo();
+		mkdirSync(join(repoDir, ".git", "hooks"), { recursive: true });
+		writeFileSync(join(repoDir, ".git", "hooks", "post-commit"),
+			"#!/bin/sh\nmemorix git-hook-callback\n");
+
+		const installed: string[] = [];
+		const { hook } = makeMockHook();
+
+		t = await createTestSession({
+			cwd: repoDir,
+			extensionFactories: [createMemorixExtension(hook, {
+				config: { autoGitHook: true },
+				installGitHook: async (cwd) => { installed.push(cwd); return true; },
+			})],
+			mockTools: MOCK_TOOLS,
+		});
+
+		expect(installed).toHaveLength(0);
+	});
+
+	it("does not install when autoGitHook is false", async () => {
+		const repoDir = makeRepo();
+		const installed: string[] = [];
+		const { hook } = makeMockHook();
+
+		t = await createTestSession({
+			cwd: repoDir,
+			extensionFactories: [createMemorixExtension(hook, {
+				config: { autoGitHook: false },
+				installGitHook: async (cwd) => { installed.push(cwd); return true; },
+			})],
+			mockTools: MOCK_TOOLS,
+		});
+
+		expect(installed).toHaveLength(0);
+	});
+
+	it("does not install when config is absent (default off)", async () => {
+		const repoDir = makeRepo();
+		const installed: string[] = [];
+		const { hook } = makeMockHook();
+
+		t = await createTestSession({
+			cwd: repoDir,
+			extensionFactories: [createMemorixExtension(hook, {
+				config: {},
+				installGitHook: async (cwd) => { installed.push(cwd); return true; },
+			})],
+			mockTools: MOCK_TOOLS,
+		});
+
+		expect(installed).toHaveLength(0);
 	});
 });
 
