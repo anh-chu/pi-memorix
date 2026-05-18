@@ -7,11 +7,9 @@
  * Covered hooks:
  *   session_start          → SessionStart    (load previous context)
  *   before_agent_start     → UserPromptSubmit (inject relevant memories per turn)
+ *   tool_result            → PostToolUse     (auto-capture writes, edits, bash)
  *   session_before_compact → PreCompact      (save context before compaction)
  *   session_shutdown       → Stop            (end session, store summary)
- *
- * PostToolUse is intentionally skipped — Memorix's git hooks and the LLM's
- * own MCP tool calls (via CLAUDE.md rules) already cover auto-capture.
  *
  * Requirements:
  *   - memorix must be on PATH (npm install -g memorix)
@@ -25,7 +23,7 @@ import { randomUUID } from "node:crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type HookEventName = "SessionStart" | "UserPromptSubmit" | "PreCompact" | "Stop";
+type HookEventName = "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "PreCompact" | "Stop";
 
 export type HookResult =
 	| { ok: true; systemMessage: string }
@@ -51,6 +49,12 @@ type SessionEntry = {
 		content?: unknown;
 	};
 };
+
+/**
+ * Tools Memorix never stores (file_read → "never", memorix internals → "never").
+ * Everything else — write, edit, bash — passes through Memorix's own filters.
+ */
+const SKIP_TOOLS = new Set(["read", "ls", "find", "grep", "glob"]);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -266,6 +270,48 @@ export function createMemorixExtension(hookRunner?: HookRunner): (pi: ExtensionA
 			} catch (err) {
 				debug(`PreCompact error: ${(err as Error).message}`);
 			}
+		});
+
+		/**
+		 * tool_result → PostToolUse
+		 * Auto-captures write/edit/bash results, matching Memorix's Claude Code behavior.
+		 * Fire-and-forget — never blocks the agent turn or modifies the result.
+		 *
+		 * Memorix applies its own filters (STORAGE_POLICY, significance, cooldowns),
+		 * so we pass everything except tools it never stores (read, ls, etc.).
+		 */
+		pi.on("tool_result", (event, ctx) => {
+			if (SKIP_TOOLS.has(event.toolName) || event.toolName.startsWith("memorix_")) return;
+
+			const text = (event.content as Array<{ type?: string; text?: string }>)
+				?.filter((b) => b.type === "text")
+				.map((b) => b.text ?? "")
+				.join("\n")
+				.trim() ?? "";
+
+			// Memorix STORAGE_POLICY minLength for file_modify and command is 50 chars
+			if (text.length < 50) return;
+
+			// Strip large content from write input to keep payload lean
+			let toolInput: unknown = event.input;
+			if (event.toolName === "write" && toolInput && typeof toolInput === "object") {
+				const { content: _c, ...rest } = toolInput as Record<string, unknown>;
+				toolInput = rest;
+			}
+
+			// normalizeClaude reads tool_name (snake_case) from the payload
+			runHook(
+				"PostToolUse",
+				{
+					tool_name: event.toolName,
+					tool_input: toolInput,
+					tool_result: text.slice(0, 2000),
+					session_id: sessionId,
+					cwd: ctx.cwd ?? sessionCwd,
+				},
+				4000,
+			).catch(() => {});
+			// No return — don't modify the tool result
 		});
 
 		/**

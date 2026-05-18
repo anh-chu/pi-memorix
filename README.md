@@ -10,12 +10,11 @@ Without this extension, Memorix memory tools are only available when the LLM exp
 |---|---|---|
 | `session_start` | `SessionStart` | Loads previous session context, injects it on the first turn |
 | `before_agent_start` | `UserPromptSubmit` | Fetches memories relevant to the current prompt |
+| `tool_result` | `PostToolUse` | Auto-captures write/edit/bash results as Memorix observations |
 | `session_before_compact` | `PreCompact` | Saves context before `/compact` wipes the thread |
 | `session_shutdown` | `Stop` | Stores a session summary when Pi exits |
 
 Also adds a `/mem <query>` command for quick memory search from within Pi.
-
-`PostToolUse` is intentionally skipped — Memorix's git hooks and the LLM's own MCP tool calls already cover auto-capture.
 
 ## Installation
 

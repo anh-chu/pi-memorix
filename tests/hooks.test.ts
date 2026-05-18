@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createTestSession, when, says, type TestSession } from "@marcfargas/pi-test-harness";
+import { createTestSession, when, calls, says, type TestSession } from "@marcfargas/pi-test-harness";
 import { createMemorixExtension, buildTranscript, type HookResult, type HookRunner } from "../memorix.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -225,6 +225,127 @@ describe("before_agent_start → UserPromptSubmit", () => {
 
 		const prompt = injectedSystemPrompts[0] ?? "";
 		expect(prompt).not.toContain("memorix-context");
+	});
+});
+
+// ─── tool_result → PostToolUse ──────────────────────────────────────────────────
+
+describe("tool_result → PostToolUse", () => {
+	let t: TestSession;
+	afterEach(() => t?.dispose());
+
+	it("fires PostToolUse after write tool with sufficient output", async () => {
+		const { hook, calls: hookCalls } = makeMockHook();
+
+		t = await createTestSession({
+			extensionFactories: [createMemorixExtension(hook)],
+			mockTools: {
+				...MOCK_TOOLS,
+				write: "File written successfully to path/to/file.ts with 1234 bytes of content",
+			},
+		});
+
+		await t.run(when("Write a file", [
+			calls("write", { path: "path/to/file.ts", content: "export const x = 1;" }),
+			says("Done."),
+		]));
+
+		// Give fire-and-forget a tick to settle
+		await new Promise((r) => setTimeout(r, 50));
+
+		const postTool = hookCalls.find((c) => c.name === "PostToolUse");
+		expect(postTool, "PostToolUse should fire after write").toBeDefined();
+		expect(postTool?.payload.tool_name).toBe("write");
+	});
+
+	it("fires PostToolUse after bash tool", async () => {
+		const { hook, calls: hookCalls } = makeMockHook();
+
+		t = await createTestSession({
+			extensionFactories: [createMemorixExtension(hook)],
+			mockTools: {
+				...MOCK_TOOLS,
+				bash: "Compiled successfully. Output: dist/index.js (12.4 kB). Build complete with 0 errors.",
+			},
+		});
+
+		await t.run(when("Run a build", [
+			calls("bash", { command: "npm run build" }),
+			says("Build succeeded."),
+		]));
+
+		await new Promise((r) => setTimeout(r, 50));
+
+		const postTool = hookCalls.find((c) => c.name === "PostToolUse");
+		expect(postTool).toBeDefined();
+		expect(postTool?.payload.tool_name).toBe("bash");
+	});
+
+	it("skips PostToolUse for read tool", async () => {
+		const { hook, calls: hookCalls } = makeMockHook();
+
+		t = await createTestSession({
+			extensionFactories: [createMemorixExtension(hook)],
+			mockTools: {
+				...MOCK_TOOLS,
+				read: "file contents here with lots of text that clearly exceeds the fifty char minimum",
+			},
+		});
+
+		await t.run(when("Read a file", [
+			calls("read", { path: "README.md" }),
+			says("I see the contents."),
+		]));
+
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(hookCalls.filter((c) => c.name === "PostToolUse")).toHaveLength(0);
+	});
+
+	it("skips PostToolUse when output is below 50 chars", async () => {
+		const { hook, calls: hookCalls } = makeMockHook();
+
+		t = await createTestSession({
+			extensionFactories: [createMemorixExtension(hook)],
+			mockTools: { ...MOCK_TOOLS, write: "ok" },
+		});
+
+		await t.run(when("Write a small file", [
+			calls("write", { path: "x.ts", content: "x" }),
+			says("Done."),
+		]));
+
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(hookCalls.filter((c) => c.name === "PostToolUse")).toHaveLength(0);
+	});
+
+	it("fires PostToolUse even on tool errors (Memorix filters significance)", async () => {
+		const { hook, calls: hookCalls } = makeMockHook();
+
+		t = await createTestSession({
+			extensionFactories: [createMemorixExtension(hook)],
+			mockTools: {
+				...MOCK_TOOLS,
+				bash: {
+					content: [{ type: "text", text: "Error: command not found and many other details here" }],
+					isError: true,
+				},
+			},
+			propagateErrors: false,
+		});
+
+		await t.run(when("Run failing command", [
+			calls("bash", { command: "nonexistent" }),
+			says("That failed."),
+		]));
+
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Claude Code plugin fires PostToolUse for errors too; Memorix filters significance
+		const postToolCalls = hookCalls.filter((c) => c.name === "PostToolUse");
+		expect(postToolCalls.length).toBeGreaterThan(0);
+		expect(postToolCalls[0]?.payload.tool_name).toBe("bash");
 	});
 });
 
