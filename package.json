@@ -4,9 +4,23 @@
   "description": "Pi extension that bridges Memorix memory hooks into Pi's session lifecycle",
   "type": "module",
   "main": "memorix.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "keywords": ["pi-package", "pi-extension", "memorix", "memory"],
   "license": "MIT",
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@marcfargas/pi-test-harness": "^0.5.0",
+    "vitest": "^3.0.0"
+  },
+  "overrides": {
+    "@mariozechner/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@*",
+    "@mariozechner/pi-ai": "npm:@earendil-works/pi-ai@*",
+    "@mariozechner/pi-agent-core": "npm:@earendil-works/pi-agent-core@*"
   }
 }
