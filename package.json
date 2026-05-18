@@ -1,6 +1,6 @@
 {
   "name": "pi-memorix",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Pi extension that bridges Memorix memory hooks into Pi's session lifecycle",
   "type": "module",
   "main": "memorix.ts",
