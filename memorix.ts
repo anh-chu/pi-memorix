@@ -4,12 +4,12 @@
  * Bridges Memorix memory hooks into Pi's extension event system.
  * Mirrors what Memorix does via .claude/settings.json hooks, but for Pi.
  *
- * Covered hooks:
- *   session_start          → memorix session start --json (load previous context)
- *   before_agent_start     → UserPromptSubmit (inject memories, visible message)
+ * Covered hooks (identical to Claude Code's native memorix integration):
+ *   session_start          → SessionStart    (load previous context hint)
+ *   before_agent_start     → UserPromptSubmit (capture + inject context message)
  *   tool_result            → PostToolUse     (auto-capture writes, edits, bash)
  *   session_before_compact → PreCompact      (save context before compaction)
- *   session_shutdown       → memorix session end --json  (store session summary)
+ *   session_shutdown       → Stop            (end session, store summary)
  *
  * Requirements:
  *   - memorix must be on PATH (npm install -g memorix)
@@ -55,12 +55,6 @@ export type HookRunner = (
 	timeoutMs?: number,
 	signal?: AbortSignal,
 ) => Promise<HookResult>;
-
-/** Runner for memorix session start/end commands. Returns previousContext or "". */
-export type SessionRunner = (
-	action: "start" | "end",
-	params: { sessionId: string; cwd: string; summary?: string },
-) => Promise<string>;
 
 type ContentBlock = {
 	type?: string;
@@ -252,54 +246,6 @@ export function buildTranscript(entries: SessionEntry[]): string {
 	return sections.join("\n\n");
 }
 
-function makeSubprocessSessionRunner(): SessionRunner {
-	return async function runMemorixSession(action, { sessionId, cwd, summary }) {
-		const env = { ...loadMemorixDotEnv(), ...process.env };
-		const args = ["session", action, "--json", "--sessionId", sessionId, "--agent", "pi"];
-		if (action === "end" && summary) {
-			args.push("--summary", summary.slice(0, 2000));
-		}
-		return new Promise((resolve) => {
-			let child: ReturnType<typeof spawn>;
-			try {
-				child = spawn("memorix", args, {
-					stdio: ["pipe", "pipe", "pipe"],
-					env,
-					cwd,
-				});
-			} catch {
-				return resolve("");
-			}
-
-			let stdout = "";
-			let settled = false;
-			const settle = (val: string) => {
-				if (!settled) { settled = true; clearTimeout(timer); resolve(val); }
-			};
-
-			const timer = setTimeout(() => {
-				debug(`memorix session ${action} timed out`);
-				try { child.kill("SIGTERM"); } catch { /* ignore */ }
-				settle("");
-			}, 10000);
-
-			child.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-			child.stderr.on("data", (d: Buffer) => { debug(`memorix session ${action} stderr: ${d.toString().trim()}`); });
-			child.on("error", () => settle(""));
-			child.on("close", () => {
-				try {
-					const parsed = JSON.parse(stdout);
-					settle(action === "start" ? (parsed.previousContext ?? "") : "");
-				} catch {
-					settle("");
-				}
-			});
-
-			if (action === "end") child.stdin.end();
-		});
-	};
-}
-
 // ─── Extension factory ────────────────────────────────────────────────────────
 
 /**
@@ -313,12 +259,10 @@ function makeSubprocessSessionRunner(): SessionRunner {
 export interface _TestOverrides {
 	config?: MemorixConfig;
 	installGitHook?: (cwd: string) => Promise<boolean>;
-	sessionRunner?: SessionRunner;
 }
 
 export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _TestOverrides): (pi: ExtensionAPI) => void {
 	const runHook: HookRunner = hookRunner ?? makeSubprocessHookRunner();
-	const runSession: SessionRunner = _overrides?.sessionRunner ?? makeSubprocessSessionRunner();
 	const _config = () => _overrides?.config ?? loadConfig();
 	const _installGitHook = _overrides?.installGitHook ?? installGitHook;
 
@@ -329,9 +273,9 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		let firstTurnDone = false;
 
 		/**
-		 * session_start → memorix session start --json
-		 * Loads rich previous session context (memories, routing hints, evidence).
-		 * If autoGitHook is enabled in memorix.json, installs the git hook if missing.
+		 * session_start → SessionStart
+		 * Mirrors Claude Code's memorix hook behavior: fetches session context hint,
+		 * stashes it so the LLM gets it on the first turn and calls memorix_session_start.
 		 */
 		pi.on("session_start", async (_event, ctx) => {
 			sessionCwd = ctx.cwd ?? process.cwd();
@@ -354,9 +298,9 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 			}
 
 			try {
-				const context = await runSession("start", { sessionId, cwd: sessionCwd });
-				if (context.trim()) {
-					pendingStartContext = context;
+				const result = await runHook("SessionStart", { sessionId, cwd: sessionCwd });
+				if (result.ok && result.systemMessage.trim()) {
+					pendingStartContext = result.systemMessage;
 					debug(`SessionStart: loaded ${pendingStartContext.length} chars`);
 				} else {
 					debug("SessionStart: fired, no context returned");
@@ -367,19 +311,20 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		});
 
 		/**
-		 * before_agent_start → inject context + UserPromptSubmit capture
+		 * before_agent_start → UserPromptSubmit + first-turn SessionStart flush
 		 *
-		 * Turn 1: injects stashed session context as a visible message.
+		 * Turn 1: injects stashed SessionStart context as a visible message so the
+		 *         LLM sees it and calls memorix_session_start (MCP) for full context.
 		 * Every turn: fires UserPromptSubmit for auto-capture of significant prompts.
 		 */
 		pi.on("before_agent_start", async (event, ctx) => {
-			// Turn 1: inject session context as a visible message
+			// Turn 1: inject session context hint as a visible message
 			if (!firstTurnDone && pendingStartContext) {
 				const context = pendingStartContext;
 				firstTurnDone = true;
 				pendingStartContext = "";
 
-				// Fire UserPromptSubmit in background for auto-capture (don't await)
+				// Fire UserPromptSubmit in background for capture
 				runHook(
 					"UserPromptSubmit",
 					{
@@ -482,24 +427,29 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		});
 
 		/**
-		 * session_shutdown → memorix session end --json
-		 * Ends the memorix session with a transcript summary.
+		 * session_shutdown → Stop
+		 * Sends a condensed transcript so memorix can store a session summary.
 		 * Awaited — Pi waits on this handler before exiting.
 		 */
 		pi.on("session_shutdown", async (_event, ctx) => {
-			let summary = "";
+			let transcript = "";
 			try {
 				const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-				summary = buildTranscript(entries).slice(0, 2000);
+				transcript = buildTranscript(entries).slice(0, 4000);
 			} catch { /* getBranch may fail on empty sessions */ }
 
-			if (summary.length < 50) {
-				summary = `Pi session ${sessionId} ended with no substantial conversation.`;
+			if (transcript.length < 50) {
+				transcript = `Pi session ${sessionId} ended with no substantial conversation.`;
 			}
 
 			try {
-				await runSession("end", { sessionId, cwd: ctx.cwd ?? sessionCwd, summary });
-				debug("Stop: session ended in memorix");
+				await runHook("Stop", {
+					sessionId,
+					cwd: ctx.cwd ?? sessionCwd,
+					transcript,
+					content: transcript,
+				}, 6000);
+				debug("Stop: session saved to memorix");
 			} catch (err) {
 				debug(`Stop error: ${(err as Error).message}`);
 			}
