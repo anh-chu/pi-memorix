@@ -32,7 +32,7 @@ pi install npm:pi-memorix
 
 To try it without making it permanent: `pi -e npm:pi-memorix`
 
-**3. Wire the MCP server** so the LLM can call `memorix_search`, `memorix_store`, etc. directly:
+**3. (Optional) Wire the MCP server** so the LLM can also call `memorix_search`, `memorix_store`, etc. directly:
 
 Add this entry to `~/.pi/agent/mcp.json` under `mcpServers`:
 
@@ -60,7 +60,7 @@ memorix git-hook   # run once per repo
 
 ## Usage
 
-Once installed, the extension runs automatically with every Pi session. Steps 3 and 4 above are optional — the lifecycle hooks (session context, per-prompt memory, real-time capture, session summary) work without them.
+Once installed, the extension runs automatically with every Pi session. Steps 3 and 4 are optional — the extension's lifecycle hooks work without them. The MCP server (step 3) adds the ability for the LLM to call `memorix_search` and `memorix_store` directly on top of the automatic capture.
 
 The `/mem` command lets you search project memory without leaving Pi:
 
