@@ -87,7 +87,20 @@ The `/mem` command lets you search project memory without leaving Pi:
 MEMORIX_PI_DEBUG=1 pi
 ```
 
-Logs all hook calls, payloads, and failures to stderr.
+Logs all hook activity to stderr. To verify hooks are firing:
+
+```
+[memorix-pi] SessionStart: loaded 1234 chars
+[memorix-pi] PostToolUse — memorix stored observation
+[memorix-pi] Auto-installed git hook in /your/repo
+[memorix-pi] Stop: session saved to memorix
+```
+
+To see what was stored after a session:
+
+```bash
+cd your-repo && memorix recent
+```
 
 ## Maintenance
 
