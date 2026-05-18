@@ -127,7 +127,7 @@ function makeSubprocessHookRunner(): HookRunner {
 
 			let child: ReturnType<typeof spawn>;
 			try {
-				child = spawn("memorix", ["hook", "--agent", "pi"], {
+				child = spawn("memorix", ["hook"], {
 					stdio: ["pipe", "pipe", "pipe"],
 					env: process.env,
 				});
