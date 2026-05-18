@@ -1,0 +1,12 @@
+{
+  "name": "pi-memorix",
+  "version": "0.1.0",
+  "description": "Pi extension that bridges Memorix memory hooks into Pi's session lifecycle",
+  "type": "module",
+  "main": "memorix.ts",
+  "keywords": ["pi-package", "pi-extension", "memorix", "memory"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
