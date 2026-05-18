@@ -2,7 +2,7 @@
 
 Pi extension that bridges [Memorix](https://github.com/AVIDS2/memorix) memory hooks into Pi's session lifecycle.
 
-Without this extension, Memorix memory tools are only available when the LLM explicitly calls them. This extension wires Memorix into Pi's event lifecycle so memory management is automatic: previous context loads at session start, relevant memories are injected per prompt, file writes and commands are captured as observations in real time, and a session summary is saved on exit.
+Wires Memorix into Pi's session lifecycle for automatic memory capture and recall. File writes, commands, and session summaries are captured as observations automatically. With the MCP server configured, the LLM also loads previous session context and searches memories at the start of each conversation.
 
 ## What it does
 
@@ -32,7 +32,7 @@ pi install npm:pi-memorix
 
 To try it without making it permanent: `pi -e npm:pi-memorix`
 
-**3. (Optional) Wire the MCP server** so the LLM can also call `memorix_search`, `memorix_store`, etc. directly:
+**3. Wire the MCP server** — required for memory recall (context injection at session start):
 
 Add this entry to `~/.pi/agent/mcp.json` under `mcpServers`:
 
@@ -43,6 +43,8 @@ Add this entry to `~/.pi/agent/mcp.json` under `mcpServers`:
   "directTools": true
 }
 ```
+
+Without this, auto-capture still works (PostToolUse, Stop) but the LLM has no tools to recall past memories. Skip this only if you want silent capture with no recall.
 
 **4. (Optional) Enable auto-install of the git hook** so commit-time capture is set up automatically for every repo you open:
 
