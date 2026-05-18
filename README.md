@@ -2,49 +2,66 @@
 
 Pi extension that bridges [Memorix](https://github.com/AVIDS2/memorix) memory hooks into Pi's session lifecycle.
 
-Memorix ships Claude Code hooks (via `.claude/settings.json`) that auto-manage session context. Pi has its own extension system — this extension ports those same behaviors so Pi sessions get the same memory continuity.
+Memorix already hooks into Claude Code automatically via `.claude/settings.json`. Pi has its own extension system — this package ports those same behaviors so Pi sessions get the same memory continuity: previous context loaded at the start, relevant memories injected per prompt, session summary saved on exit.
 
 ## What it does
 
-| Pi event | Memorix equivalent | Behavior |
+| Pi event | Memorix hook | Behavior |
 |---|---|---|
-| `session_start` | `SessionStart` | Loads previous session context, injects on first turn |
-| `before_agent_start` | `UserPromptSubmit` | Fetches relevant memories for each prompt |
-| `session_before_compact` | `PreCompact` | Saves context before `/compact` |
-| `session_shutdown` | `Stop` | Stores session summary on exit |
+| `session_start` | `SessionStart` | Loads previous session context, injects it on the first turn |
+| `before_agent_start` | `UserPromptSubmit` | Fetches memories relevant to the current prompt |
+| `session_before_compact` | `PreCompact` | Saves context before `/compact` wipes the thread |
+| `session_shutdown` | `Stop` | Stores a session summary when Pi exits |
 
 Also adds a `/mem <query>` command for quick memory search from within Pi.
 
-`PostToolUse` is intentionally skipped — Memorix's git hooks and the LLM's MCP tool calls (via the CLAUDE.md rules Memorix installs) already handle auto-capture.
+`PostToolUse` is intentionally skipped — Memorix's git hooks and the LLM's own MCP tool calls (via Memorix's CLAUDE.md rules) already cover auto-capture.
 
 ## Requirements
 
 - [Pi](https://pi.dev) coding agent
-- [Memorix](https://github.com/AVIDS2/memorix) installed globally: `npm install -g memorix`
-- `memorix` on PATH in the environment where Pi runs
+- [Memorix](https://github.com/AVIDS2/memorix) installed and on PATH: `npm install -g memorix`
 
 ## Installation
 
 ```bash
-# Copy to your Pi extensions directory
-cp memorix.ts ~/.pi/agent/extensions/memorix.ts
-
-# Load it when starting Pi
-pi -e ~/.pi/agent/extensions/memorix.ts
+pi install npm:pi-memorix
 ```
 
-Or add it to your Pi config to load automatically.
+To try it without making it permanent:
+
+```bash
+pi -e npm:pi-memorix
+```
+
+Or copy the extension file directly if you prefer:
+
+```bash
+cp memorix.ts ~/.pi/agent/extensions/memorix.ts
+```
+
+## Usage
+
+Once installed, the extension runs automatically with every Pi session. No configuration needed.
+
+The `/mem` command lets you search project memory without leaving Pi:
+
+```
+/mem how does auth work
+/mem recent session context
+/mem what changed in the API layer
+```
 
 ## Debug mode
 
 ```bash
-MEMORIX_PI_DEBUG=1 pi -e ~/.pi/agent/extensions/memorix.ts
+MEMORIX_PI_DEBUG=1 pi
 ```
 
-Logs all hook calls and failures to stderr.
+Logs all hook calls, payloads, and failures to stderr.
 
 ## Notes
 
-- Memorix requires a `.git` directory in the project root to detect the project. Outside git repos, hooks are silently skipped.
-- All memorix failures are silent by default — Pi never crashes because of this extension.
-- The extension caches a `memorixUnavailable` flag after the first `ENOENT` to avoid repeated failed spawn attempts.
+- Memorix requires a `.git` directory in the project root to identify the project. Outside git repos, hooks are silently skipped.
+- All Memorix failures are silent by default — Pi never crashes because of this extension.
+- If `memorix` is not found on PATH, the extension disables itself after the first failed spawn.
