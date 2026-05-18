@@ -136,6 +136,85 @@ describe("session_start → SessionStart", () => {
 	});
 });
 
+// ─── Retry logic ────────────────────────────────────────────────────────────────
+
+describe("SessionStart retry", () => {
+	let t: TestSession;
+	afterEach(() => t?.dispose());
+
+	it("retries SessionStart on before_agent_start if session_start returned nothing", async () => {
+		const CONTEXT = "Retried context: found on second attempt";
+		const injectedSystemPrompts: string[] = [];
+		let sessionStartCalls = 0;
+
+		const hook: HookRunner = async (name) => {
+			if (name === "SessionStart") {
+				sessionStartCalls++;
+				// First call (session_start): return empty. Second call (retry): return context.
+				return sessionStartCalls === 1
+					? { ok: true, systemMessage: "" }
+					: { ok: true, systemMessage: CONTEXT };
+			}
+			return { ok: true, systemMessage: "" };
+		};
+
+		const baseExtFactory = createMemorixExtension(hook);
+		const spyExtFactory = (pi: Parameters<typeof baseExtFactory>[0]) => {
+			baseExtFactory(pi);
+			pi.on("before_agent_start", async (event) => {
+				injectedSystemPrompts.push(event.systemPrompt);
+			});
+		};
+
+		t = await createTestSession({
+			extensionFactories: [spyExtFactory],
+			mockTools: MOCK_TOOLS,
+		});
+
+		await t.run(when("Hello", [says("Hi.")]));
+
+		expect(injectedSystemPrompts[0]).toContain(CONTEXT);
+		expect(sessionStartCalls).toBe(2); // once at session_start, once as retry
+	});
+
+	it("gives up after MAX_RECALL_ATTEMPTS retries", async () => {
+		const injectedSystemPrompts: string[] = [];
+		let sessionStartCalls = 0;
+
+		const hook: HookRunner = async (name) => {
+			if (name === "SessionStart") { sessionStartCalls++; }
+			return { ok: true, systemMessage: "" }; // always empty
+		};
+
+		const baseExtFactory = createMemorixExtension(hook);
+		const spyExtFactory = (pi: Parameters<typeof baseExtFactory>[0]) => {
+			baseExtFactory(pi);
+			pi.on("before_agent_start", async (event) => {
+				injectedSystemPrompts.push(event.systemPrompt);
+			});
+		};
+
+		t = await createTestSession({
+			extensionFactories: [spyExtFactory],
+			mockTools: MOCK_TOOLS,
+		});
+
+		await t.run(
+			when("Turn 1", [says("A.")]),
+			when("Turn 2", [says("B.")]),
+			when("Turn 3", [says("C.")]),
+			when("Turn 4", [says("D.")]),
+		);
+
+		// Should not inject memorix-session-context on any turn
+		for (const prompt of injectedSystemPrompts) {
+			expect(prompt).not.toContain("memorix-session-context");
+		}
+		// 1 at session_start + 3 MAX_RECALL_ATTEMPTS retries = 4 total
+		expect(sessionStartCalls).toBe(4);
+	});
+});
+
 // ─── before_agent_start → UserPromptSubmit ────────────────────────────────────
 
 describe("before_agent_start → UserPromptSubmit", () => {

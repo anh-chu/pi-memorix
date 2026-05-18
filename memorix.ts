@@ -19,6 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -121,6 +122,8 @@ function installGitHook(cwd: string): Promise<boolean> {
  * Everything else — write, edit, bash — passes through Memorix's own filters.
  */
 const SKIP_TOOLS = new Set(["read", "ls", "find", "grep", "glob"]);
+
+const MAX_RECALL_ATTEMPTS = 3;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -271,17 +274,43 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		let sessionCwd = process.cwd();
 		let pendingStartContext = "";
 		let firstTurnDone = false;
+		let recallAttempts = 0;
+
+		function resetSessionState(cwd: string, id: string) {
+			sessionCwd = cwd;
+			sessionId = id;
+			pendingStartContext = "";
+			firstTurnDone = false;
+			recallAttempts = 0;
+		}
+
+		async function loadSessionContext() {
+			try {
+				const result = await runHook("SessionStart", { sessionId, cwd: sessionCwd });
+				if (result.ok && result.systemMessage.trim()) {
+					pendingStartContext = result.systemMessage;
+					debug(`SessionStart: loaded ${pendingStartContext.length} chars`);
+				} else {
+					debug("SessionStart: fired, no context returned");
+				}
+			} catch (err) {
+				debug(`SessionStart error: ${(err as Error).message}`);
+			}
+		}
+
+		// Message renderer for the session context card
+		pi.registerMessageRenderer("memorix-session-context", (_message, _options, theme) => {
+			const text = theme.fg("accent", "🧠 memorix") + theme.fg("muted", " — context loaded");
+			return new Text(text, 0, 0);
+		});
 
 		/**
 		 * session_start → SessionStart
-		 * Mirrors Claude Code's memorix hook behavior: fetches session context hint,
-		 * stashes it so the LLM gets it on the first turn and calls memorix_session_start.
+		 * Resets state, optionally installs git hook, pre-fetches session context.
 		 */
 		pi.on("session_start", async (_event, ctx) => {
-			sessionCwd = ctx.cwd ?? process.cwd();
-			sessionId = ctx.sessionManager.getSessionName() ?? randomUUID();
-			pendingStartContext = "";
-			firstTurnDone = false;
+			resetSessionState(ctx.cwd ?? process.cwd(), ctx.sessionManager.getSessionName() ?? randomUUID());
+			if (ctx.hasUI) ctx.ui.setStatus("memorix", undefined);
 
 			// Auto-install git hook if opted in and not already present
 			const config = _config();
@@ -297,62 +326,30 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 				}
 			}
 
-			try {
-				const result = await runHook("SessionStart", { sessionId, cwd: sessionCwd });
-				if (result.ok && result.systemMessage.trim()) {
-					pendingStartContext = result.systemMessage;
-					debug(`SessionStart: loaded ${pendingStartContext.length} chars`);
-				} else {
-					debug("SessionStart: fired, no context returned");
-				}
-			} catch (err) {
-				debug(`SessionStart error: ${(err as Error).message}`);
-			}
+			await loadSessionContext();
 		});
 
 		/**
-		 * before_agent_start → UserPromptSubmit + first-turn SessionStart flush
+		 * session_compact → reset and re-fetch
+		 * After /compact the context window is wiped — re-inject on the next turn.
+		 */
+		pi.on("session_compact", async (_event, ctx) => {
+			resetSessionState(ctx.cwd ?? sessionCwd, sessionId);
+			if (ctx.hasUI) ctx.ui.setStatus("memorix", undefined);
+			debug("session_compact: state reset, will re-inject on next turn");
+			await loadSessionContext();
+		});
+
+		/**
+		 * before_agent_start → inject context + UserPromptSubmit capture
 		 *
-		 * Turn 1: injects stashed SessionStart context as a visible message so the
-		 *         LLM sees it and calls memorix_session_start (MCP) for full context.
+		 * Turn 1 (or after /compact): injects stashed SessionStart context as a visible
+		 * message so the LLM calls memorix_session_start (MCP) for full context.
+		 * Retries up to MAX_RECALL_ATTEMPTS if SessionStart returned nothing.
 		 * Every turn: fires UserPromptSubmit for auto-capture of significant prompts.
 		 */
 		pi.on("before_agent_start", async (event, ctx) => {
-			// Turn 1: inject session context hint as a visible message
-			if (!firstTurnDone && pendingStartContext) {
-				const context = pendingStartContext;
-				firstTurnDone = true;
-				pendingStartContext = "";
-
-				// Fire UserPromptSubmit in background for capture
-				runHook(
-					"UserPromptSubmit",
-					{
-						sessionId,
-						cwd: ctx.cwd ?? sessionCwd,
-						prompt: event.prompt,
-						userPrompt: event.prompt,
-					},
-					10000,
-				).then((result) => {
-					if (result.ok && result.systemMessage.trim()) {
-						debug(`UserPromptSubmit: captured ${result.systemMessage.length} chars`);
-					} else {
-						debug("UserPromptSubmit: fired, no capture");
-					}
-				}).catch(() => {});
-
-				return {
-					message: {
-						customType: "memorix-session-context",
-						content: context,
-						display: true,
-					},
-					systemPrompt: `${event.systemPrompt}\n\n<memorix-session-context>\n${context}\n</memorix-session-context>`,
-				};
-			}
-
-			// Subsequent turns: fire UserPromptSubmit for capture only
+			// Fire UserPromptSubmit in background for capture (every turn)
 			runHook(
 				"UserPromptSubmit",
 				{
@@ -369,6 +366,40 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 					debug("UserPromptSubmit: fired, no capture");
 				}
 			}).catch(() => {});
+
+			if (firstTurnDone) return;
+
+			// Retry fetching context if session_start didn't return anything
+			if (!pendingStartContext && recallAttempts < MAX_RECALL_ATTEMPTS) {
+				recallAttempts++;
+				debug(`SessionStart retry ${recallAttempts}/${MAX_RECALL_ATTEMPTS}`);
+				if (ctx.hasUI) ctx.ui.setStatus("memorix", `loading context… (${recallAttempts}/${MAX_RECALL_ATTEMPTS})`);
+				await loadSessionContext();
+			}
+
+			if (!pendingStartContext) {
+				if (recallAttempts >= MAX_RECALL_ATTEMPTS) {
+					// Exhausted retries — give up
+					firstTurnDone = true;
+					if (ctx.hasUI) ctx.ui.setStatus("memorix", "⚠ context unavailable");
+				}
+				// else: still under limit — retry on the next turn
+				return;
+			}
+
+			const context = pendingStartContext;
+			firstTurnDone = true;
+			pendingStartContext = "";
+			if (ctx.hasUI) ctx.ui.setStatus("memorix", undefined);
+
+			return {
+				message: {
+					customType: "memorix-session-context",
+					content: context,
+					display: true,
+				},
+				systemPrompt: `${event.systemPrompt}\n\n<memorix-session-context>\n${context}\n</memorix-session-context>`,
+			};
 		});
 
 		/**
