@@ -3,11 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestSession, when, calls, says, type TestSession } from "@marcfargas/pi-test-harness";
-import { createMemorixExtension, buildTranscript, type HookResult, type HookRunner } from "../memorix.ts";
+import { createMemorixExtension, buildTranscript, type HookResult, type HookRunner, type SessionRunner } from "../memorix.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 type HookCall = { name: string; payload: Record<string, unknown> };
+type SessionCall = { action: string; params: Record<string, unknown> };
 
 /** Creates a mock hook runner that records calls and returns configurable responses. */
 function makeMockHook(
@@ -21,6 +22,18 @@ function makeMockHook(
 		return { ok: true, systemMessage };
 	};
 	return { hook, calls };
+}
+
+/** Creates a mock session runner that records calls and returns configurable context. */
+function makeMockSession(
+	startContext = "",
+): { runner: SessionRunner; calls: SessionCall[] } {
+	const calls: SessionCall[] = [];
+	const runner: SessionRunner = async (action, params) => {
+		calls.push({ action, params });
+		return action === "start" ? startContext : "";
+	};
+	return { runner, calls };
 }
 
 /** Creates a mock hook runner that always fails. */
@@ -46,45 +59,41 @@ describe("session_start → SessionStart", () => {
 	let t: TestSession;
 	afterEach(() => t?.dispose());
 
-	it("calls SessionStart when the session is created", async () => {
-		const { hook, calls } = makeMockHook();
+	it("calls session start when the session is created", async () => {
+		const { runner, calls: sessionCalls } = makeMockSession();
 
 		t = await createTestSession({
-			extensionFactories: [createMemorixExtension(hook)],
+			extensionFactories: [createMemorixExtension(undefined, { sessionRunner: runner })],
 			mockTools: MOCK_TOOLS,
 		});
 
-		const start = calls.find((c) => c.name === "SessionStart");
-		expect(start, "SessionStart hook should have been called").toBeDefined();
+		const start = sessionCalls.find((c) => c.action === "start");
+		expect(start, "session start should have been called").toBeDefined();
 	});
 
-	it("passes cwd and sessionId to SessionStart", async () => {
-		const { hook, calls } = makeMockHook();
+	it("passes cwd and sessionId to session start", async () => {
+		const { runner, calls: sessionCalls } = makeMockSession();
 
 		t = await createTestSession({
-			extensionFactories: [createMemorixExtension(hook)],
+			extensionFactories: [createMemorixExtension(undefined, { sessionRunner: runner })],
 			mockTools: MOCK_TOOLS,
 		});
 
-		const start = calls.find((c) => c.name === "SessionStart")!;
-		expect(typeof start.payload.cwd).toBe("string");
-		expect((start.payload.cwd as string).length).toBeGreaterThan(0);
-		expect(typeof start.payload.sessionId).toBe("string");
-		expect((start.payload.sessionId as string).length).toBeGreaterThan(0);
+		const start = sessionCalls.find((c) => c.action === "start")!;
+		expect(typeof start.params.cwd).toBe("string");
+		expect((start.params.cwd as string).length).toBeGreaterThan(0);
+		expect(typeof start.params.sessionId).toBe("string");
+		expect((start.params.sessionId as string).length).toBeGreaterThan(0);
 	});
 
-	it("stashes SessionStart context and injects it on the first turn", async () => {
+	it("stashes session context and injects it as a message on the first turn", async () => {
 		const CONTEXT = "Previous session: fixed the auth bug in api/login.ts";
 		const injectedSystemPrompts: string[] = [];
 
-		// Capture what systemPrompt the extension returned on before_agent_start
-		const hook: HookRunner = async (name) => {
-			if (name === "SessionStart") return { ok: true, systemMessage: CONTEXT };
-			return { ok: true, systemMessage: "" };
-		};
+		const { runner } = makeMockSession(CONTEXT);
+		const { hook } = makeMockHook();
 
-		// Wrap the extension to spy on the systemPrompt it produces
-		const baseExtFactory = createMemorixExtension(hook);
+		const baseExtFactory = createMemorixExtension(hook, { sessionRunner: runner });
 		const spyExtFactory = (pi: Parameters<typeof baseExtFactory>[0]) => {
 			baseExtFactory(pi);
 			pi.on("before_agent_start", async (event) => {
@@ -99,22 +108,20 @@ describe("session_start → SessionStart", () => {
 
 		await t.run(when("Hello", [says("Hi there.")]));
 
-		// The FIRST turn should contain the stashed context
+		// The FIRST turn systemPrompt should contain the stashed context
 		const firstPrompt = injectedSystemPrompts[0] ?? "";
 		expect(firstPrompt).toContain("memorix-session-context");
 		expect(firstPrompt).toContain(CONTEXT);
 	});
 
-	it("only injects SessionStart context on the first turn, not subsequent turns", async () => {
+	it("only injects session context on the first turn, not subsequent turns", async () => {
 		const CONTEXT = "Previous session context";
 		const injectedSystemPrompts: string[] = [];
 
-		const hook: HookRunner = async (name) => {
-			if (name === "SessionStart") return { ok: true, systemMessage: CONTEXT };
-			return { ok: true, systemMessage: "" };
-		};
+		const { runner } = makeMockSession(CONTEXT);
+		const { hook } = makeMockHook();
 
-		const baseExtFactory = createMemorixExtension(hook);
+		const baseExtFactory = createMemorixExtension(hook, { sessionRunner: runner });
 		const spyExtFactory = (pi: Parameters<typeof baseExtFactory>[0]) => {
 			baseExtFactory(pi);
 			pi.on("before_agent_start", async (event) => {
@@ -148,9 +155,10 @@ describe("before_agent_start → UserPromptSubmit", () => {
 
 	it("calls UserPromptSubmit on every agent turn", async () => {
 		const { hook, calls } = makeMockHook();
+		const { runner } = makeMockSession();
 
 		t = await createTestSession({
-			extensionFactories: [createMemorixExtension(hook)],
+			extensionFactories: [createMemorixExtension(hook, { sessionRunner: runner })],
 			mockTools: MOCK_TOOLS,
 		});
 
@@ -165,9 +173,10 @@ describe("before_agent_start → UserPromptSubmit", () => {
 
 	it("passes the user's prompt text to UserPromptSubmit", async () => {
 		const { hook, calls } = makeMockHook();
+		const { runner } = makeMockSession();
 
 		t = await createTestSession({
-			extensionFactories: [createMemorixExtension(hook)],
+			extensionFactories: [createMemorixExtension(hook, { sessionRunner: runner })],
 			mockTools: MOCK_TOOLS,
 		});
 
@@ -177,7 +186,7 @@ describe("before_agent_start → UserPromptSubmit", () => {
 		expect(submit.payload.prompt).toBe("What is the capital of France?");
 	});
 
-	it("injects UserPromptSubmit context into systemPrompt", async () => {
+	it("does not inject UserPromptSubmit result into systemPrompt (fire-and-forget)", async () => {
 		const MEMORY = "Key fact: the API uses JWT tokens";
 		const injectedSystemPrompts: string[] = [];
 
@@ -185,8 +194,9 @@ describe("before_agent_start → UserPromptSubmit", () => {
 			if (name === "UserPromptSubmit") return { ok: true, systemMessage: MEMORY };
 			return { ok: true, systemMessage: "" };
 		};
+		const { runner } = makeMockSession();
 
-		const baseExtFactory = createMemorixExtension(hook);
+		const baseExtFactory = createMemorixExtension(hook, { sessionRunner: runner });
 		const spyExtFactory = (pi: Parameters<typeof baseExtFactory>[0]) => {
 			baseExtFactory(pi);
 			pi.on("before_agent_start", async (event) => {
@@ -201,9 +211,9 @@ describe("before_agent_start → UserPromptSubmit", () => {
 
 		await t.run(when("How does auth work?", [says("It uses JWT.")]));
 
+		// UserPromptSubmit is fire-and-forget — result is NOT injected into systemPrompt
 		const prompt = injectedSystemPrompts[0] ?? "";
-		expect(prompt).toContain("memorix-context");
-		expect(prompt).toContain(MEMORY);
+		expect(prompt).not.toContain("memorix-context");
 	});
 
 	it("does not inject into systemPrompt when UserPromptSubmit returns empty", async () => {
