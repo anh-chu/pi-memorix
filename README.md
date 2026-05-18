@@ -60,7 +60,7 @@ memorix git-hook   # run once per repo
 
 ## Usage
 
-Once installed, the extension runs automatically with every Pi session. No configuration needed.
+Once installed, the extension runs automatically with every Pi session. Steps 3 and 4 above are optional — the lifecycle hooks (session context, per-prompt memory, real-time capture, session summary) work without them.
 
 The `/mem` command lets you search project memory without leaving Pi:
 
