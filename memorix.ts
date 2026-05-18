@@ -336,7 +336,7 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 						prompt: event.prompt,
 						userPrompt: event.prompt,
 					},
-					4000,
+					10000,
 				);
 				if (result.ok && result.systemMessage.trim()) {
 					additions.push(`<memorix-context>\n${result.systemMessage}\n</memorix-context>`);
