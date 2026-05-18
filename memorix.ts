@@ -286,6 +286,8 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 				if (result.ok && result.systemMessage.trim()) {
 					pendingStartContext = result.systemMessage;
 					debug(`SessionStart: loaded ${pendingStartContext.length} chars`);
+				} else {
+					debug("SessionStart: fired, no context returned");
 				}
 			} catch (err) {
 				debug(`SessionStart error: ${(err as Error).message}`);
@@ -323,6 +325,8 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 				if (result.ok && result.systemMessage.trim()) {
 					additions.push(`<memorix-context>\n${result.systemMessage}\n</memorix-context>`);
 					debug(`UserPromptSubmit: injected ${result.systemMessage.length} chars`);
+				} else {
+					debug("UserPromptSubmit: fired, no memories matched");
 				}
 			} catch (err) {
 				debug(`UserPromptSubmit error: ${(err as Error).message}`);
