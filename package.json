@@ -18,6 +18,14 @@
     "lifecycle"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anh-chu/pi-memorix.git"
+  },
+  "homepage": "https://github.com/anh-chu/pi-memorix#readme",
+  "bugs": {
+    "url": "https://github.com/anh-chu/pi-memorix/issues"
+  },
   "files": [
     "memorix.ts",
     "README.md"
