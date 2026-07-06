@@ -125,6 +125,35 @@ const SKIP_TOOLS = new Set(["read", "ls", "find", "grep", "glob"]);
 
 const MAX_RECALL_ATTEMPTS = 3;
 
+/**
+ * Detect actual registered memorix MCP tool names at runtime.
+ * Handles all prefix modes: memorix_search, memorix_memorix_search, or bare search.
+ * Returns a map from canonical name (e.g. "search") to actual registered name.
+ */
+function detectMemorixToolNames(pi: ExtensionAPI): Map<string, string> {
+	const map = new Map<string, string>();
+	const CANONICAL = ["search", "store", "session_start", "session_end", "session_context",
+		"resolve", "detail", "timeline", "retention", "transfer",
+		"store_reasoning", "search_reasoning", "suggest_topic_key"];
+	try {
+		const allTools = pi.getAllTools();
+		for (const tool of allTools) {
+			for (const canonical of CANONICAL) {
+				if (
+					tool.name === `memorix_${canonical}` ||
+					tool.name === `memorix_memorix_${canonical}` ||
+					tool.name === canonical
+				) {
+					map.set(canonical, tool.name);
+				}
+			}
+		}
+	} catch {
+		debug("Failed to detect memorix tool names via pi.getAllTools()");
+	}
+	return map;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const debug = (msg: string) => {
@@ -275,6 +304,7 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		let pendingStartContext = "";
 		let firstTurnDone = false;
 		let recallAttempts = 0;
+		let memorixToolNames: Map<string, string> = new Map();
 
 		function resetSessionState(cwd: string, id: string) {
 			sessionCwd = cwd;
@@ -311,6 +341,14 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		pi.on("session_start", async (_event, ctx) => {
 			resetSessionState(ctx.cwd ?? process.cwd(), ctx.sessionManager.getSessionName() ?? randomUUID());
 			if (ctx.hasUI) ctx.ui.setStatus("memorix", undefined);
+
+			// Detect actual memorix MCP tool names (handles directTools on/off, any prefix mode)
+			memorixToolNames = detectMemorixToolNames(pi);
+			if (memorixToolNames.size > 0) {
+				debug(`Detected memorix tools: ${[...memorixToolNames.entries()].map(([k, v]) => `${k}=${v}`).join(", ")}`);
+			} else {
+				debug("No memorix MCP tools detected \u2014 recall depends on hook injection only");
+			}
 
 			// Auto-install git hook if opted in and not already present
 			const config = _config();
@@ -392,13 +430,20 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 			pendingStartContext = "";
 			if (ctx.hasUI) ctx.ui.setStatus("memorix", undefined);
 
+			// Build tool name hints so LLM uses correct names regardless of directTools/prefix config
+			const searchTool = memorixToolNames.get("search") ?? "memorix_search";
+			const storeTool = memorixToolNames.get("store") ?? "memorix_store";
+			const toolHint = memorixToolNames.size > 0
+				? `\n\nTo search memorix memories, use the "${searchTool}" tool. To store new memories, use the "${storeTool}" tool.`
+				: "";
+
 			return {
 				message: {
 					customType: "memorix-session-context",
-					content: context,
+					content: context + toolHint,
 					display: true,
 				},
-				systemPrompt: `${event.systemPrompt}\n\n<memorix-session-context>\n${context}\n</memorix-session-context>`,
+				systemPrompt: `${event.systemPrompt}\n\n<memorix-session-context>\n${context}${toolHint}\n</memorix-session-context>`,
 			};
 		});
 
@@ -424,7 +469,8 @@ export function createMemorixExtension(hookRunner?: HookRunner, _overrides?: _Te
 		 * so we pass everything except tools it never stores (read, ls, etc.).
 		 */
 		pi.on("tool_result", (event, ctx) => {
-			if (SKIP_TOOLS.has(event.toolName) || event.toolName.startsWith("memorix_")) return;
+			// Skip read-only tools and any memorix tool (regardless of prefix mode)
+			if (SKIP_TOOLS.has(event.toolName) || event.toolName.includes("memorix")) return;
 
 			const text = (event.content as Array<{ type?: string; text?: string }>)
 				?.filter((b) => b.type === "text")
